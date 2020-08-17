@@ -1,7 +1,7 @@
 /**
  *  Inovelli Dimmer LZW31
  *  Author: Eric Maycock (erocm123)
- *  Date: 2020-05-06
+ *  Date: 2020-07-17
  *
  *  Copyright 2020 Eric Maycock / Inovelli
  *
@@ -13,6 +13,13 @@
  *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
+ *
+ *  2020-07-17: Added configuration parameter (51 & 51) for firmware 1.47+ 
+ *              51 allows you to disable the 700ms delay when turing switch on/off from the wall.
+ *              52 is to put the switch into a "smart bulb" mode to optimize the output for smart bulbs.
+ *
+ *  2020-07-01: Fix for bool settings not showing correctly in SmartThings app.
+ *              Adding white LED color options for firmware 1.45+
  *
  *  2020-05-05: Adding ColorControl capability to allow changing the LED bar color easily with setColor.
  *              Adding preferences to automatically disable logs after x minutes. Previously the informational
@@ -139,12 +146,12 @@ def generate_preferences()
     input "disableLocal", "enum", title: "Disable Local Control", description: "\nDisable ability to control switch from the wall", required: false, options:["1": "Yes", "0": "No"], defaultValue: "0"
     input "disableRemote", "enum", title: "Disable Remote Control", description: "\nDisable ability to control switch from inside SmartThings", required: false, options:["1": "Yes", "0": "No"], defaultValue: "0"
     input description: "Use the below options to enable child devices for the specified settings. This will allow you to adjust these settings using SmartApps such as Smart Lighting. If any of the options are enabled, make sure you have the appropriate child device handlers installed.\n(Firmware 1.02+)", title: "Child Devices", displayDuringSetup: false, type: "paragraph", element: "paragraph"
-    input "enableDisableLocalChild", "bool", title: "Create \"Disable Local Control\" Child Device", description: "", required: false, defaultValue: false
-    input "enableDisableRemoteChild", "bool", title: "Create \"Disable Remote Control\" Child Device", description: "", required: false, defaultValue: false
-    input "enableDefaultLocalChild", "bool", title: "Create \"Default Level (Local)\" Child Device", description: "", required: false, defaultValue: false
-    input "enableDefaultZWaveChild", "bool", title: "Create \"Default Level (Z-Wave)\" Child Device", description: "", required: false, defaultValue: false
-    input name: "debugEnable", type: "bool", title: "Enable Debug Logging", defaultValue: true
-    input name: "infoEnable", type: "bool", title: "Enable Informational Logging", defaultValue: true
+    input "enableDisableLocalChild", "boolean", title: "Create \"Disable Local Control\" Child Device", description: "", required: false, defaultValue: "false"
+    input "enableDisableRemoteChild", "boolean", title: "Create \"Disable Remote Control\" Child Device", description: "", required: false, defaultValue: "false"
+    input "enableDefaultLocalChild", "boolean", title: "Create \"Default Level (Local)\" Child Device", description: "", required: false, defaultValue: "false"
+    input "enableDefaultZWaveChild", "boolean", title: "Create \"Default Level (Z-Wave)\" Child Device", description: "", required: false, defaultValue: "false"
+    input name: "debugEnable", type: "boolean", title: "Enable Debug Logging", defaultValue: "true"
+    input name: "infoEnable", type: "boolean", title: "Enable Informational Logging", defaultValue: "true"
 }
 
 private channelNumber(String dni) {
@@ -163,22 +170,23 @@ private sendAlert(data) {
 
 def logsOff(){
     log.warn "${device.label?device.label:device.name}: Disabling logging after timeout"
-    //device.updateSetting("debugEnable",[value:"false",type:"bool"])
-    //device.updateSetting("infoEnable",[value:"false",type:"bool"])
+    //device.updateSetting("debugEnable",[value:"false",type:"boolean"])
+    //device.updateSetting("infoEnable",[value:"false",type:"boolean"])
 } 
 
 def setColor(value) {
     if (infoEnable) log.info "${device.label?device.label:device.name}: setColor($value)"
 	if (value.hue == null || value.saturation == null) return
-	if (value.level == null) value.level=50
 	def ledColor = Math.round(huePercentToZwaveValue(value.hue))
-    def ledLevel = Math.round(value.level/10)
 	if (infoEnable) log.info "${device.label?device.label:device.name}: Setting LED color value to $ledColor & LED intensity to $ledLevel"
     def cmds = []
+    if (value.level != null) {
+        def ledLevel = Math.round(value.level/10)
+        cmds << setParameter(14, ledLevel, 1)
+        cmds << getParameter(14)
+    }
     cmds << setParameter(13, ledColor, 2)
-    cmds << setParameter(14, ledLevel, 1)
     cmds << getParameter(13)
-    cmds << getParameter(14)
     return commands(cmds)
 }
 
@@ -338,13 +346,13 @@ private deleteChild(id){
 def initialize() {
     sendEvent(name: "checkInterval", value: 3 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zwave", hubHardwareId: device.hub.hardwareID, offlinePingable: "1"])
     
-    if (enableDefaultLocalChild) addChild("ep9", "Default Local Level", "InovelliUSA", "Switch Level Child Device", false)
+    if (enableDefaultLocalChild == "true") addChild("ep9", "Default Local Level", "InovelliUSA", "Switch Level Child Device", false)
     else deleteChild("ep9")
-    if (enableDefaultZWaveChild) addChild("ep10", "Default Z-Wave Level", "InovelliUSA", "Switch Level Child Device", false)
+    if (enableDefaultZWaveChild == "true") addChild("ep10", "Default Z-Wave Level", "InovelliUSA", "Switch Level Child Device", false)
     else deleteChild("ep10")
-    if (enableDisableLocalChild) addChild("ep101", "Disable Local Control", "smartthings", "Child Switch", false)
+    if (enableDisableLocalChild == "true") addChild("ep101", "Disable Local Control", "smartthings", "Child Switch", false)
     else deleteChild("ep101")
-    if (enableDisableRemoteChild) addChild("ep102", "Disable Remote Control", "smartthings", "Child Switch", false)
+    if (enableDisableRemoteChild == "true") addChild("ep102", "Disable Remote Control", "smartthings", "Child Switch", false)
     else deleteChild("ep102")
     
     if (device.label != state.oldLabel) {
@@ -424,7 +432,7 @@ def getParameter(number) {
 }
 
 def getParameterNumbers(){
-    return [1,2,3,4,5,6,7,8,9,10,11,13,14,15,17,21,22]
+    return [1,2,3,4,5,6,7,8,9,10,11,13,14,15,17,21,22,51,52]
 }
 
 def getParameterInfo(number, value){
@@ -452,6 +460,8 @@ def getParameterInfo(number, value){
     parameter.parameter20default=10
     parameter.parameter21default=1
     parameter.parameter22default=0
+    parameter.parameter51default=1
+    parameter.parameter52default=0
     
     parameter.parameter1type="number"
     parameter.parameter2type="number"
@@ -475,6 +485,8 @@ def getParameterInfo(number, value){
     parameter.parameter20type="number"
     parameter.parameter21type="enum"
     parameter.parameter22type="enum"
+    parameter.parameter51type="enum"
+    parameter.parameter52type="enum"
     
     parameter.parameter1size=1
     parameter.parameter2size=1
@@ -498,6 +510,8 @@ def getParameterInfo(number, value){
     parameter.parameter20size=1
     parameter.parameter21size=1
     parameter.parameter22size=1
+    parameter.parameter51size=1
+    parameter.parameter52size=1
     
     parameter.parameter1options="0..100"
     parameter.parameter2options="0..101"
@@ -507,11 +521,11 @@ def getParameterInfo(number, value){
     parameter.parameter6options="55..99"
     parameter.parameter7options=["1":"Yes", "0":"No"]
     parameter.parameter8options="0..32767"
-    parameter.parameter9options="0..100"
-    parameter.parameter10options="0..100"
+    parameter.parameter9options="0..99"
+    parameter.parameter10options="0..99"
     parameter.parameter11options="0..100"
     parameter.parameter12options="0..15"
-    parameter.parameter13options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink"]
+    parameter.parameter13options=["0":"Red","21":"Orange","42":"Yellow","85":"Green","127":"Cyan","170":"Blue","212":"Violet","234":"Pink","255":"White (Firmware 1.45+)"]
     parameter.parameter14options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
     parameter.parameter15options=["0":"0%","1":"10%","2":"20%","3":"30%","4":"40%","5":"50%","6":"60%","7":"70%","8":"80%","9":"90%","10":"100%"]
     parameter.parameter16options=["1":"Yes", "2":"No"]
@@ -521,6 +535,8 @@ def getParameterInfo(number, value){
     parameter.parameter20options="0..100"
     parameter.parameter21options=["0":"Non Neutral", "1":"Neutral"]
     parameter.parameter22options=["0":"Load Only", "1":"3-way Toggle", "2":"3-way Momentary"]
+    parameter.parameter51options=["1":"No (Default)", "0":"Yes"]
+    parameter.parameter52options=["0":"No (Default)", "1":"Yes"]
     
     parameter.parameter1name="Dimming Speed"
     parameter.parameter2name="Dimming Speed (From Switch)"
@@ -544,6 +560,8 @@ def getParameterInfo(number, value){
     parameter.parameter20name="Energy Reports"
     parameter.parameter21name="AC Power Type"
     parameter.parameter22name="Switch Type"
+    parameter.parameter51name="Disable Physical On/Off Delay"
+    parameter.parameter52name="Smart Bulb Mode"
     
     parameter.parameter1description="This changes the speed in which the attached light dims up or down. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed."
     parameter.parameter2description="This changes the speed in which the attached light dims up or down when controlled from the physical switch. A setting of 0 should turn the light immediately on or off (almost like an on/off switch). Increasing the value should slow down the transition speed. A setting of 101 should keep this in sync with parameter 1."
@@ -567,6 +585,8 @@ def getParameterInfo(number, value){
     parameter.parameter20description="The energy level change that will result in a new energy report being sent. The value is a percentage of the previous report."
     parameter.parameter21description="Configure the switch to use a neutral wire."
     parameter.parameter22description="Configure the type of 3-way switch connected to the dimmer."
+    parameter.parameter51description="The 700ms delay that occurs after pressing the physical button to turn the switch on/off is removed. Consequently this also removes the following scenes: 2x, 3x, 4x, 5x tap. 1x tap and config button scenes still work. (firmware 1.47+)"
+    parameter.parameter52description="Optimize power output to be more compatible with smart bulbs. This prevents the dimmer from being able to dim & makes it act like an ON / OFF switch. (firmware 1.47+)"
     
     return parameter."parameter${number}${value}"
 }
